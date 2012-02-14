@@ -1,0 +1,187 @@
+#!/usr/bin/perl
+# Copyright (c) 2012
+# Conor McDermottroe.  All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice,
+#    this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+# 3. Neither the name of the author nor the names of any contributors to the
+#    software may be used to endorse or promote products derived from this
+#    software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+use strict;
+use warnings;
+
+use Cwd qw(abs_path cwd);
+use File::Basename;
+use File::Find;
+
+# Find the repo dirs to scan for work-in-progress
+#
+# If we're in a git checkout, just show the WIP for the current repo.
+# Otherwise, search for the git repos.
+my @repo_dirs;
+if (-d '.git') {
+	@repo_dirs = (abs_path('.'));
+} else {
+	@repo_dirs = &repo_dirs();
+}
+
+# Calculate the WIP and output it.
+foreach my $repo_dir (@repo_dirs) {
+	my @wip = &wip($repo_dir);
+	if (@wip) {
+		print basename($repo_dir) . "\n";
+		foreach (@wip) {
+			print "  $_\n";
+		}
+	}
+}
+
+# Collate the work-in-progress items for a repo.
+#
+# @param $repo The directory in which the repo lives.
+#
+# @return A list of lines describing the work in progress for the repo.
+sub wip {
+	my $repo = shift;
+
+	my @wip;
+
+	# Find un-committed changes.
+	my @status = &status($repo);
+	if (@status) {
+		push @wip, @status;
+	}
+
+	# Find the status of all the branches we have.
+	my %branches = &branches($repo);
+	foreach (sort keys %branches) {
+		my $ahead = $branches{$_}{'ahead'};
+		if ($ahead < 0) {
+			push @wip, "$_ is not tracking a remote branch.";
+		} elsif ($ahead > 0) {
+			push @wip, "$_ is ahead of its remote branch by $ahead commits.";
+		}
+	}
+
+	# Check for any stashes
+	my @stashes = &stashes($repo);
+	if (@stashes) {
+		push @wip, "There are stashed changes.";
+	}
+
+	return @wip;
+}
+
+# Find the status of all the branches in the repo.
+#
+# @param $repo The path to the repository.
+#
+# @return	A hash where the key is the name of the branch and the value is the
+#			number of commits that the branch is ahead of its remote tracking
+#			branch. If this number is -1, it means that the branch is not
+#			tracking a remote branch.
+sub branches {
+	my $repo = shift;
+	my %branches;
+	foreach (&git($repo, 'branch -vv')) {
+		if (/^\*?\s+(\S+)\s+\S+\s+(?:\[(.*?)\])?/o) {
+			my $branch = $1;
+			my $remote_info = $2;
+			if ($remote_info) {
+				if ($remote_info =~ /: ahead (\d+)/o) {
+					$branches{$branch}{'ahead'} = $1;
+				} else {
+					$branches{$branch}{'ahead'} = 0;
+				}
+			} else {
+				$branches{$branch}{'ahead'} = -1;
+			}
+		}
+	}
+	return %branches;
+}
+
+# List all the stashes in the repo.
+#
+# @param $repo The path to the repository.
+#
+# @return The output of 'git stash list' for the repo.
+sub stashes {
+	my $repo = shift;
+	return &git($repo, 'stash list');
+}
+
+# Show the status of the files in the repo.
+#
+# @param $repo The path to the repository.
+#
+# @return The output of 'git status --porcelain --untracked-files=all'
+sub status {
+	my $repo = shift;
+	return &git($repo, 'status --porcelain --untracked-files=all');
+}
+
+# Generate a list of git repositories.
+#
+# @param @root_dirs The directories to search for git repos.
+#
+# @return A list of directories which are the root of git directories.
+sub repo_dirs {
+	my @root_dirs = @_;
+	my @repo_dirs;
+
+	if ($ENV{'HOME'}) {
+		push @root_dirs, $ENV{'HOME'};
+	}
+
+	find(
+		sub {
+			if (-d "$File::Find::name/.git") {
+				push @repo_dirs, $File::Find::name;
+				$File::Find::prune = 1;
+			}
+		},
+		@root_dirs
+	);
+	@repo_dirs = sort @repo_dirs;
+
+	return @repo_dirs;
+}
+
+# Run a git command.
+#
+# @param $repo		The directory in which to run the command.
+# @param $command	The command to run, minus the leading 'git'.
+#
+# @return An array containing the lines outputted by the git command.
+sub git {
+	my $repo = shift;
+	my $command = shift;
+
+	my $cwd = cwd();
+	chdir $repo;
+	my $output = `git $command`;
+	chdir $cwd;
+
+	return split(/(?:\r\n|\r|\n)/o, $output);
+}
