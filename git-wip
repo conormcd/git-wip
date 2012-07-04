@@ -103,7 +103,7 @@ sub wip {
 sub branches {
 	my $repo = shift;
 	my %branches;
-	foreach (&git($repo, 'branch -vv')) {
+	foreach (&git($repo, 'branch -vv --no-merged master 2> /dev/null')) {
 		if (/^\*?\s+(\S+)\s+\S+\s+(?:\[(.*?)\])?/o) {
 			my $branch = $1;
 			my $remote_info = $2;
