@@ -33,16 +33,23 @@ use warnings;
 use Cwd qw(abs_path cwd);
 use File::Basename;
 use File::Find;
+use File::Spec;
 
 # Find the repo dirs to scan for work-in-progress
 #
 # If we're in a git checkout, just show the WIP for the current repo.
 # Otherwise, search for the git repos.
 my @repo_dirs;
-if (-d '.git') {
-	@repo_dirs = (abs_path('.'));
+if (@ARGV) {
+	@repo_dirs = &repo_dirs(grep { -d $_ } @ARGV);
+} elsif ($ENV{'GIT_REPO_HOME'}) {
+	@repo_dirs = &repo_dirs(grep { -d $_ } split /\s+/o, $ENV{'GIT_REPO_HOME'});
 } else {
-	@repo_dirs = &repo_dirs();
+	if (my $repo_dir = is_git_repo('.')) {
+		@repo_dirs = ($repo_dir);
+	} else {
+		@repo_dirs = &repo_dirs($ENV{'HOME'});
+	}
 }
 
 # Calculate the WIP and output it.
@@ -150,10 +157,6 @@ sub repo_dirs {
 	my @root_dirs = @_;
 	my @repo_dirs;
 
-	if ($ENV{'HOME'}) {
-		push @root_dirs, $ENV{'HOME'};
-	}
-
 	find(
 		sub {
 			if (-d "$File::Find::name/.git") {
@@ -166,6 +169,29 @@ sub repo_dirs {
 	@repo_dirs = sort @repo_dirs;
 
 	return @repo_dirs;
+}
+
+# Test if a directory is within a git repository.
+#
+# @param $dir	The directory to test.
+#
+# @return	If $dir is a directory inside a git repo, return the full path to
+#			the root of the repo. If $dir is not a directory inside a git repo,
+#			return false.
+sub is_git_repo {
+	my $dir = shift;
+
+	unless (File::Spec->file_name_is_absolute($dir)) {
+		$dir = abs_path($dir);
+	}
+
+	my @dir_portions = File::Spec->splitdir($dir);
+	for (my $i = @dir_portions - 1; $i >= 0; $i--) {
+		if (-d File::Spec->catdir((@dir_portions[0..$i], '.git'))) {
+			return File::Spec->catdir(@dir_portions[0..$i]);
+		}
+	}
+	return undef;
 }
 
 # Run a git command.
