@@ -30,6 +30,7 @@
 use strict;
 use warnings;
 
+use Config;
 use Cwd qw(abs_path cwd);
 use File::Basename;
 use File::Find;
@@ -148,6 +149,30 @@ sub status {
 	return &git($repo, 'status --porcelain --untracked-files=all');
 }
 
+# Create a regular expression which matches the full path to directories which
+# should be excluded from the search for repositories.
+#
+# @return A regular expression suitable for matching against $File::Find::name
+sub excluded_repo_roots {
+	my $regex;
+	my @excluded_roots;
+
+	if ($Config{'osname'} eq 'darwin') {
+		push @excluded_roots, "$ENV{HOME}/.Trash";
+		push @excluded_roots, "$ENV{HOME}/Library";
+		push @excluded_roots, "$ENV{HOME}/Movies";
+		push @excluded_roots, "$ENV{HOME}/Music";
+		push @excluded_roots, "$ENV{HOME}/Pictures";
+	}
+
+	if (@excluded_roots) {
+		$regex = join('|', map { quotemeta } @excluded_roots);
+		$regex = qr/^$regex$/o;
+	}
+
+	return $regex;
+}
+
 # Generate a list of git repositories.
 #
 # @param @root_dirs The directories to search for git repos.
@@ -157,9 +182,13 @@ sub repo_dirs {
 	my @root_dirs = @_;
 	my @repo_dirs;
 
+	my $exclude = &excluded_repo_roots;
+
 	find(
 		sub {
-			if (-d "$File::Find::name/.git") {
+			if ($exclude && $File::Find::name =~ $exclude) {
+				$File::Find::prune = 1;
+			} elsif (-d "$File::Find::name/.git") {
 				push @repo_dirs, $File::Find::name;
 				$File::Find::prune = 1;
 			}
